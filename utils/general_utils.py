@@ -162,6 +162,8 @@ def _get_custom_exp_code(args):
     param_code += "_pathT_" + str(args.type_of_path)
     # param_code += "_sp_" + str(args.specific_simple)
     param_code += "_s" + str(args.seed)
+    param_code += "_lr" + str(args.lr)
+    param_code += "_opt" + str(args.opt)
 
     #----> Updating
     args.param_code = param_code
@@ -204,9 +206,9 @@ def _create_results_dir(args):
         - None 
     
     """
-    args.results_dir = os.path.join(args.results_dir) # create an experiment specific subdir in the results dir
+    # create an experiment specific subdir in the results dir
     if not os.path.isdir(args.results_dir):
-        os.mkdir(args.results_dir)
+        os.makedirs(args.results_dir, exist_ok=True)
         #---> add gitignore to results dir
         f = open(os.path.join(args.results_dir, ".gitignore"), "w")
         f.write("*\n")
@@ -217,7 +219,7 @@ def _create_results_dir(args):
     #---> results for this specific experiment
     args.results_dir = os.path.join(args.results_dir, args.param_code)
     if not os.path.isdir(args.results_dir):
-        os.mkdir(args.results_dir)
+        os.makedirs(args.results_dir, exist_ok=True)
 
 def _get_start_end(args):
     r"""

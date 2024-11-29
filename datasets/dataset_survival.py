@@ -11,7 +11,7 @@ from __future__ import print_function, division
 import os
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import  MinMaxScaler
+from sklearn.preprocessing import  MinMaxScaler, StandardScaler
 
 import torch
 from torch.utils.data import Dataset
@@ -25,7 +25,7 @@ class SurvivalDatasetFactory:
 
     def __init__(self,
                  study,
-                 label_file,
+                 label_dir,
                  omics_dir,
                  seed,
                  print_info,
@@ -43,7 +43,7 @@ class SurvivalDatasetFactory:
 
         Args:
             - study : String
-            - label_file : String
+            - label_dir : String
             - omics_dir : String
             - seed : Int
             - print_info : Boolean
@@ -62,7 +62,7 @@ class SurvivalDatasetFactory:
 
         # ---> self
         self.study = study
-        self.label_file = label_file
+        self.label_dir = label_dir
         self.omics_dir = omics_dir
         self.seed = seed
         self.print_info = print_info
@@ -76,18 +76,19 @@ class SurvivalDatasetFactory:
         self.type_of_path = type_of_pathway
         self.mode = mode
 
-        if self.label_col == "survival_months":
+        if self.label_col == "os_survival_days":
             self.survival_endpoint = "OS"
-            self.censorship_var = "censorship"
-        elif self.label_col == "survival_months_pfi":
+            self.censorship_var = "os_censorship"
+        elif self.label_col == "pfi_survival_days":
             self.survival_endpoint = "PFI"
-            self.censorship_var = "censorship_pfi"
-        elif self.label_col == "survival_months_dss":
+            self.censorship_var = "pfi_censorship"
+        elif self.label_col == "dss_survival_days":
             self.survival_endpoint = "DSS"
-            self.censorship_var = "censorship_dss"
+            self.censorship_var = "dss_censorship"
 
         # ---> process omics data
-        self._setup_omics_data()  # self.all_modalities.shape = (n_samples, n_features)
+        self._setup_omics_data()  #  = (n_samples, n_features)
+        print("shape of rna data: ", self.all_modalities['rna'].shape)
 
         # ---> labels, metadata, patient_df
         self._setup_metadata_and_labels(eps)
@@ -95,7 +96,7 @@ class SurvivalDatasetFactory:
         # ---> prepare for weighted sampling
         self._cls_ids_prep()
 
-        # ---> load all clinical data
+        # ---> load all clinical data --> is in patients and label
         self._load_clinical_data()
 
         # ---> summarize
@@ -168,8 +169,9 @@ class SurvivalDatasetFactory:
             - None
 
         """
-        path_to_data = "./datasets_csv/clinical_data/{}_clinical.csv".format(self.study)
-        self.clinical_data = pd.read_csv(path_to_data, index_col=0)
+        # path_to_data = "./datasets_csv/clinical_data/{}_clinical.csv".format(self.study)
+        # self.clinical_data = pd.read_csv(path_to_data, index_col=0)
+        self.clinical_data = self.label_data
 
     def _setup_omics_data(self):
         r"""
@@ -183,12 +185,13 @@ class SurvivalDatasetFactory:
 
         """
         self.all_modalities = {}
-        for modality in ALL_MODALITIES:
-            self.all_modalities[modality.split('_')[0]] = pd.read_csv(
-                os.path.join(self.omics_dir, modality),
-                engine='python',
-                index_col=0
-            )
+        print("Getting RNA data from: ", self.omics_dir)
+        self.all_modalities['rna'] = pd.read_csv(
+            self.omics_dir,
+            engine='python',
+            index_col=0
+        )
+        self.all_modalities['rna'] = self.all_modalities['rna'].rename(columns={'Unnamed: 0': 'case_id'})
 
     def _setup_metadata_and_labels(self, eps):
         r"""
@@ -205,7 +208,11 @@ class SurvivalDatasetFactory:
         """
 
         # ---> read labels
-        self.label_data = pd.read_csv(self.label_file, low_memory=False)
+        all_files = os.path.join(self.label_dir, os.listdir(self.label_dir)[0])
+        train = pd.read_csv(os.path.join(all_files, 'train.csv'), low_memory=False)
+        test = pd.read_csv(os.path.join(all_files, 'test.csv'), low_memory=False)
+
+        self.label_data = pd.concat([train, test], ignore_index=True)
 
         # ---> minor clean-up of the labels
         uncensored_df = self._clean_label_data()
@@ -230,14 +237,12 @@ class SurvivalDatasetFactory:
 
         """
 
-        if "IDC" in self.label_data['oncotree_code']:  # must be BRCA (and if so, use only IDCs)
-            self.label_data = self.label_data[self.label_data['oncotree_code'] == 'IDC']
-
         self.patients_df = self.label_data.drop_duplicates(['case_id']).copy()
         uncensored_df = self.patients_df[self.patients_df[self.censorship_var] < 1]
 
         return uncensored_df
 
+    # we measure in days!! --> principle is the same
     def _discretize_survival_months(self, eps, uncensored_df):
         r"""
         This is where we convert the regression survival problem into a classification problem. We bin all survival times into
@@ -257,7 +262,7 @@ class SurvivalDatasetFactory:
         q_bins[-1] = self.label_data[self.label_col].max() + eps
         q_bins[0] = self.label_data[self.label_col].min() - eps
 
-        # assign patients to different bins according to their months' quantiles (on all data)
+        # assign patients to different bins according to their days!' quantiles (on all data)
         # cut will choose bins so that the values of bins are evenly spaced. Each bin may have different frequncies
         disc_labels, q_bins = pd.cut(self.patients_df[self.label_col], bins=q_bins, retbins=True, labels=False,
                                      right=False, include_lowest=True)
@@ -405,12 +410,11 @@ class SurvivalDatasetFactory:
 
         """
 
-        assert csv_path
-        all_splits = pd.read_csv(csv_path)
         print("Defining datasets...")
-        train_split, scaler, _ = self._get_split_from_df(args, all_splits=all_splits, split_key='train', fold=fold,
-                                                         scaler=None)
-        val_split = self._get_split_from_df(args, all_splits=all_splits, split_key='val', fold=fold, scaler=scaler)
+        train_split_file = os.path.join(csv_path, 'train.csv')
+        train_split, scaler, _ = self._get_split_from_df(args, all_splits=train_split_file, split_key='train', fold=fold, scaler=None)
+        val_split_file = os.path.join(csv_path, 'test.csv')
+        val_split = self._get_split_from_df(args, all_splits=val_split_file, split_key='val', fold=fold, scaler=scaler)
 
         args.omic_sizes = args.dataset_factory.omic_sizes
         datasets = (train_split, val_split)
@@ -427,10 +431,11 @@ class SurvivalDatasetFactory:
             - data : np.array
 
         Returns:
-            - scaler : MinMaxScaler
+            - scaler : MinMaxScaler, OR StandardScaler
 
         """
-        scaler = MinMaxScaler(feature_range=(-1, 1)).fit(data)
+        # scaler = MinMaxScaler(feature_range=(-1, 1)).fit(data)
+        scaler = StandardScaler().fit(data)
         return scaler
 
     def _apply_scaler(self, data, scaler):
@@ -476,40 +481,35 @@ class SurvivalDatasetFactory:
 
         """
 
+        split = pd.read_csv(all_splits)['case_id']
+
         if not scaler:
             scaler = {}
-        split = all_splits[split_key]
         split = split.dropna().reset_index(drop=True)
 
         mask = self.label_data['case_id'].isin(split.tolist())
         df_metadata_slide = args.dataset_factory.label_data.loc[mask, :].reset_index(drop=True)
+    
 
         # select the rna, meth, mut, cnv data for this split
         omics_data_for_split = {}
+
         for key in args.dataset_factory.all_modalities.keys():
 
             raw_data_df = args.dataset_factory.all_modalities[key]
-            mask = raw_data_df.index.isin(split.tolist())
+            mask = raw_data_df['case_id'].isin(split.tolist())
 
             filtered_df = raw_data_df[mask]
             filtered_df = filtered_df[~filtered_df.index.duplicated()]  # drop duplicate case_ids
             filtered_df["temp_index"] = filtered_df.index
             filtered_df.reset_index(inplace=True, drop=True)
+            # added to remove the case_names??
+            filtered_df = filtered_df.drop(labels="case_id", axis=1)
 
             clinical_data_mask = self.clinical_data.case_id.isin(split.tolist())
             clinical_data_for_split = self.clinical_data[clinical_data_mask]
             clinical_data_for_split = clinical_data_for_split.set_index("case_id")
             clinical_data_for_split = clinical_data_for_split.replace(np.nan, "N/A")
-
-            # from metadata drop any cases that are not in filtered_df
-            mask = [True if item in list(filtered_df["temp_index"]) else False for item in df_metadata_slide.case_id]
-            df_metadata_slide = df_metadata_slide[mask]
-            df_metadata_slide.reset_index(inplace=True, drop=True)
-
-            mask = [True if item in list(filtered_df["temp_index"]) else False for item in
-                    clinical_data_for_split.index]
-            clinical_data_for_split = clinical_data_for_split[mask]
-            clinical_data_for_split = clinical_data_for_split[~clinical_data_for_split.index.duplicated(keep='first')]
 
             # normalize your df
             filtered_normed_df = None
@@ -590,7 +590,7 @@ class SurvivalDatasetFactory:
             patient_dict=args.dataset_factory.patient_dict,
             metadata=df_metadata_slide,
             omics_data_dict=omics_data_for_split,
-            data_dir=os.path.join(args.data_root_dir),
+            data_dir=args.data_root_dir,
             num_classes=self.num_classes,
             label_col=self.label_col,
             censorship_var=self.censorship_var,
@@ -625,8 +625,8 @@ class SurvivalDataset(Dataset):
                  omics_data_dict,
                  data_dir,
                  num_classes,
-                 label_col="survival_months_DSS",
-                 censorship_var="censorship_DSS",
+                 label_col="dss_survival_days", # originally in months?????
+                 censorship_var="dss_censorship",
                  valid_cols=None,
                  is_training=True,
                  clinical_data=-1,
@@ -753,7 +753,6 @@ class SurvivalDataset(Dataset):
         c = torch.Tensor([self.metadata[self.censorship_var][idx]])
         slide_ids = self.patient_dict[case_id]
         clinical_data = self.get_clinical_data(case_id)
-
         return label, event_time, c, slide_ids, clinical_data, case_id
 
     def _load_wsi_embs_from_path(self, data_dir, slide_ids, case_id=None):
@@ -775,7 +774,7 @@ class SurvivalDataset(Dataset):
         if self.mode == "cluster":
             patch_features = []
             for slide_id in slide_ids:
-                wsi_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id.rstrip('.svs')))
+                wsi_path = os.path.join(data_dir, '{}.pt'.format(slide_id.rstrip('.svs')))
                 wsi_bag = torch.load(wsi_path)
                 patch_features.append(wsi_bag)
                 cluster_ids = np.load(os.path.join(data_dir, 'patch-l1-cluster10-ids', '{}.npy'.format(case_id)))
@@ -784,8 +783,7 @@ class SurvivalDataset(Dataset):
         elif self.mode == "resnet50":
             patch_features = []
             for slide_id in slide_ids:
-                # print(1)
-                wsi_path = os.path.join(data_dir, 'pt_files',
+                wsi_path = os.path.join(data_dir,
                                         '{}.pt'.format(slide_id.rstrip('.svs')))  # /pt_files/resnet50/
                 wsi_bag = torch.load(wsi_path)
                 patch_features.append(wsi_bag)
@@ -793,7 +791,7 @@ class SurvivalDataset(Dataset):
         else: # "swin"
             patch_features = []
             for slide_id in slide_ids:
-                wsi_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id.rstrip('.svs')))
+                wsi_path = os.path.join(data_dir, '{}.pt'.format(slide_id.rstrip('.svs')))
                 wsi_bag = torch.load(wsi_path)
                 patch_features.append(wsi_bag)
             patch_features = torch.cat(patch_features, dim=0)
@@ -856,17 +854,17 @@ class SurvivalDataset(Dataset):
 
         """
         try:
-            stage = self.clinical_data.loc[case_id, "stage"]
+            stage = self.clinical_data.loc[case_id, 'ajcc_pathologic_tumor_stage']
         except:
             stage = "N/A"
 
         try:
-            grade = self.clinical_data.loc[case_id, "grade"]
+            grade = self.clinical_data.loc[case_id, 'histological_grade']
         except:
             grade = "N/A"
 
         try:
-            subtype = self.clinical_data.loc[case_id, "subtype"]
+            subtype = self.clinical_data.loc[case_id, 'histological_type']
         except:
             subtype = "N/A"
 

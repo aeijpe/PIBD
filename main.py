@@ -15,8 +15,9 @@ import warnings
 warnings.filterwarnings("ignore")
 
 def main(args):
+    print("In main now")
 
-    #----> prep for 5 fold cv study
+    # #----> prep for 5 fold cv study
     folds = _get_start_end(args)
     
     #----> storing the val and test cindex for 5 fold cv
@@ -34,11 +35,14 @@ def main(args):
         log_path = os.path.join(args.results_dir, 'log_start_{}_end_{}.txt'.format(args.k_start, args.k_end))
     log_file = open(log_path, 'w')
 
+
+    upper_study_name = args.study.upper()
     for i in folds:
-        
+        print(f"We are in fold {i}")
+        csv_path_fold = os.path.join(args.label_dir, f'{upper_study_name}_overall_survival_k={i}/')
         datasets = args.dataset_factory.return_splits(
             args,
-            csv_path='{}/splits_{}.csv'.format(args.split_dir, i),
+            csv_path=csv_path_fold,
             fold=i
         )
         
@@ -107,7 +111,7 @@ if __name__ == "__main__":
     #----> create dataset factory
     args.dataset_factory = SurvivalDatasetFactory(
         study=args.study,
-        label_file=args.label_file,
+        label_dir=args.label_dir,
         omics_dir=args.omics_dir,
         seed=args.seed, 
         print_info=True, 
@@ -115,8 +119,8 @@ if __name__ == "__main__":
         label_col=args.label_col, 
         eps=1e-6,
         num_patches=args.num_patches,
-        is_mcat = True if args.omics_format == 'groups' else False,
-        is_survpath = True if args.omics_format == 'pathways' else False,
+        is_mcat = True if args.omics_format == 'groups' else False, # ???
+        is_survpath = True if args.omics_format == 'pathways' else False, # ???
         type_of_pathway=args.type_of_path,
         mode = args.mode,
     )

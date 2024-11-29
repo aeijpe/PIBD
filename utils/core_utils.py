@@ -11,7 +11,7 @@ from utils.file_utils import _save_pkl
 import torch
 
 from utils.general_utils import _get_split_loader, _print_network, _save_splits
-from utils.loss_func import NLLSurvLoss,SurvPLE, RankLoss
+from utils.loss_func import NLLSurvLoss,SurvPLE, RankLoss,SurvRankingLoss
 
 import torch.optim as optim
 
@@ -35,10 +35,11 @@ def _get_splits(datasets, cur, args):
     print('\nTraining Fold {}!'.format(cur))
     print('\nInit train/val splits...', end=' ')
     train_split, val_split = datasets
+    print(type(train_split))
     _save_splits(datasets, ['train', 'val'], os.path.join(args.results_dir, 'splits_{}.csv'.format(cur)))
     print('Done!')
-    print("Training on {} samples".format(len(train_split)))
-    print("Validating on {} samples".format(len(val_split)))
+    print("Training on {} samples".format(train_split.__len__()))
+    print("Validating on {} samples".format(val_split.__len__()))
 
     return train_split,val_split
 
@@ -59,6 +60,8 @@ def _init_loss_function(args):
         loss_fn = NLLSurvLoss(alpha=args.alpha_surv)
     elif args.bag_loss == 'cox_surv':
         loss_fn = SurvPLE()
+    elif args.bag_loss == 'cox_surv_mmp':
+        loss_fn = SurvRankingLoss()
     elif args.bag_loss == 'rank_surv':
         loss_fn = RankLoss()
     else:
@@ -378,6 +381,7 @@ def _train_loop_survival(args, epoch, model, omics_format, loader, optimizer, lo
     all_clinical_data = []
 
     # one epoch
+    print("EPOCH: ", epoch)
     for batch_idx, data in enumerate(loader):
 
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, omics_format, device, data)
@@ -443,7 +447,7 @@ def _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores,
     
     """
     
-    data = loader.dataset.metadata["survival_months_dss"]
+    data = loader.dataset.metadata["dss_survival_days"]
     bins_original = dataset_factory.bins
     which_times_to_eval_at = np.array([data.min() + 0.0001, bins_original[1], bins_original[2], data.max() - 0.0001])
 
@@ -657,6 +661,7 @@ def _step(cur, args, loss_fn, model, optimizer, train_loader, val_loader, log_fi
                 val_IBS,
                 val_iauc
             ))
+        
         if val_cindex >= args.max_cindex:
             args.max_cindex = val_cindex
             args.max_cindex_epoch = epoch
